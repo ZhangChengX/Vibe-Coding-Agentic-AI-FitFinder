@@ -18,6 +18,8 @@ Usage (once implemented):
     print(result["error"])   # None on success
 """
 
+import re
+
 from tools import search_listings, suggest_outfit, create_fit_card
 
 
@@ -45,11 +47,69 @@ def _new_session(query: str, wardrobe: dict) -> dict:
     }
 
 
+# ── query parsing ───────────────────────────────────────────────────────────────
+
+# Recognized size tokens (checked as standalone words, case-insensitive).
+_SIZE_TOKENS = ["xxs", "xs", "s", "m", "l", "xl", "xxl"]
+
+
+def _parse_query(query: str) -> dict:
+    """
+    Extract a search description, size, and max_price from a free-text query.
+
+    Uses simple regex/string rules (per the Planning Loop spec):
+      - max_price: a "$NN" or "under/below/less than NN" pattern.
+      - size:      a "size X" pattern, or a standalone size token (S, M, XL…).
+      - description: the remaining text, with the matched price/size removed.
+                     Falls back to the raw query if nothing usable is left.
+
+    Returns:
+        {"description": str, "size": str | None, "max_price": float | None}
+    """
+    remaining = query
+
+    # max_price — "under $30", "below 40", "$25", "less than 20"
+    max_price = None
+    price_match = re.search(
+        r"(?:under|below|less than|max|<=?)?\s*\$\s*(\d+(?:\.\d+)?)"
+        r"|(?:under|below|less than|max)\s+(\d+(?:\.\d+)?)",
+        query,
+        flags=re.IGNORECASE,
+    )
+    if price_match:
+        amount = price_match.group(1) or price_match.group(2)
+        max_price = float(amount)
+        remaining = remaining.replace(price_match.group(0), " ")
+
+    # size — explicit "size X" first, then a standalone size token.
+    size = None
+    size_match = re.search(r"\bsize\s+([\w./]+)", remaining, flags=re.IGNORECASE)
+    if size_match:
+        size = size_match.group(1).upper()
+        remaining = remaining.replace(size_match.group(0), " ")
+    else:
+        for token in _SIZE_TOKENS:
+            token_match = re.search(rf"\b{token}\b", remaining, flags=re.IGNORECASE)
+            if token_match:
+                size = token.upper()
+                remaining = remaining[: token_match.start()] + " " + remaining[token_match.end():]
+                break
+
+    # description — leftover keywords; fall back to the raw query if empty.
+    # (Price digits were already removed above; keep other digits like "90s"/"2003".)
+    description = remaining.replace("$", " ")
+    description = re.sub(r"\s+", " ", description).strip(" ,.")
+    if not description:
+        description = query.strip()
+
+    return {"description": description, "size": size, "max_price": max_price}
+
+
 # ── planning loop ─────────────────────────────────────────────────────────────
 
 def run_agent(query: str, wardrobe: dict) -> dict:
     """
-    Main agent entry point. Runs the FitFindr planning loop for a single
+    Main agent entry point. Runs the FitFinder planning loop for a single
     user interaction and returns the completed session dict.
 
     Args:
@@ -92,9 +152,46 @@ def run_agent(query: str, wardrobe: dict) -> dict:
     Before writing code, complete the Planning Loop and State Management sections
     of planning.md — your implementation should match what you described there.
     """
-    # TODO: implement the planning loop
+    # Step 1: Initialize the session.
     session = _new_session(query, wardrobe)
-    session["error"] = "Planning loop not yet implemented."
+
+    # Step 2: Parse the query into description / size / max_price.
+    session["parsed"] = _parse_query(query)
+    parsed = session["parsed"]
+
+    # Step 3: Search. Branch on the result — do NOT proceed on an empty list.
+    session["search_results"] = search_listings(
+        parsed["description"], parsed["size"], parsed["max_price"]
+    )
+    if not session["search_results"]:
+        size_note = f" in size {parsed['size']}" if parsed["size"] else ""
+        price_note = f" under ${parsed['max_price']:g}" if parsed["max_price"] is not None else ""
+        session["error"] = (
+            f"No listings matched '{parsed['description']}'{price_note}{size_note}. "
+            "Try raising the price, dropping the size, or using broader keywords."
+        )
+        return session  # early exit — suggest_outfit / create_fit_card not called
+
+    # Step 4: Select the top-ranked item.
+    session["selected_item"] = session["search_results"][0]
+
+    # Step 5: Suggest an outfit. Guard against a failed/blank result.
+    try:
+        outfit = suggest_outfit(session["selected_item"], session["wardrobe"])
+    except Exception as exc:  # LLM/API failure — don't crash the agent
+        session["error"] = f"Couldn't generate an outfit suggestion: {exc}"
+        return session
+    if not outfit or not outfit.strip():
+        session["error"] = "Couldn't generate an outfit suggestion for this item."
+        return session  # early exit — create_fit_card not called
+    session["outfit_suggestion"] = outfit
+
+    # Step 6: Create the fit card from the outfit + selected item.
+    session["fit_card"] = create_fit_card(
+        session["outfit_suggestion"], session["selected_item"]
+    )
+
+    # Step 7: Return the completed session (error stays None on success).
     return session
 
 

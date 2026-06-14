@@ -159,35 +159,35 @@ For each tool, describe the specific failure mode you're handling and what the a
 
 <!-- Draw a diagram of your agent showing how the components connect:
      User input → Planning Loop → Tools (search_listings, suggest_outfit, create_fit_card)
-                                                                          ↕
-                                                                   State / Session
+  
+     State / Session
      Show what triggers each tool, how state flows between them, and where error paths branch off.
      ASCII art, a Mermaid diagram (https://mermaid.js.org/syntax/flowchart.html), or an embedded
      sketch are all fine. You'll share this diagram with an AI tool when asking it to implement
      the planning loop and each individual tool. -->
 
 ```
-                         ┌──────────────────────────────────────────┐
+                         ┌────────────────────────────────────────────┐
                          │  SESSION STATE (dict, run_agent)           │
-                         │  query · parsed{description,size,max_price} │
-                         │  search_results · selected_item · wardrobe  │
-                         │  outfit_suggestion · fit_card · error       │
-                         └──────────────────────────────────────────┘
-                              ▲ read/write at every stage  ▲
-                              │                            │
-  User query + wardrobe       │                            │
-        │                     │                            │
-        ▼                     │                            │
-  ┌───────────────┐  query    │                            │
-  │ Planning Loop │───────────┘                            │
-  │  (run_agent)  │                                        │  ERROR PATH
-  └───────────────┘                                        │  (return session
-        │                                                  │   early; outfit &
+                         │  query · parsed{description,size,max_price}│
+                         │  search_results · selected_item · wardrobe │
+                         │  outfit_suggestion · fit_card · error      │
+                         └────────────────────────────────────────────┘
+                              ▲ read/write at every stage   ▲
+                              │                             │
+  User query + wardrobe       │                             │
+        │                     │                             │
+        ▼                     │                             │
+  ┌───────────────┐  query    │                             │
+  │ Planning Loop │───────────┘                             │
+  │  (run_agent)  │                                         │  ERROR PATH
+  └───────────────┘                                         │  (return session
+        │                                                   │   early; outfit &
         │  parse query → parsed{description,size,max_price} │   fit_card stay None)
-        ▼                                                  │
-  ┌──────────────────────────────────────────────┐        │
-  │ search_listings(description, size, max_price)  │        │
-  └──────────────────────────────────────────────┘        │
+        ▼                                                   │
+  ┌───────────────────────────────────────────────┐         │
+  │ search_listings(description, size, max_price) │         │
+  └───────────────────────────────────────────────┘         │
         │ returns list[dict]                                │
         │                                                   │
         ├── results == []  ──► error = "No listings found…" ┤
@@ -197,29 +197,29 @@ For each tool, describe the specific failure mode you're handling and what the a
    Session: selected_item = search_results[0]               │
         │                                                   │
         ▼                                                   │
-  ┌──────────────────────────────────────────────┐        │
+  ┌────────────────────────────────────────────────┐        │
   │ suggest_outfit(selected_item, wardrobe)        │  ◄── wardrobe (from session)
   │   empty wardrobe → general advice (no error)   │        │
-  └──────────────────────────────────────────────┘        │
+  └────────────────────────────────────────────────┘        │
         │ returns str                                       │
         │                                                   │
         ├── raised / blank string ──► error = "Couldn't style…" ┤
         │                                                   │
         │ outfit_suggestion = "…"                           │
         ▼                                                   │
-  ┌──────────────────────────────────────────────┐        │
+  ┌────────────────────────────────────────────────┐        │
   │ create_fit_card(outfit_suggestion, selected_item) │     │
-  └──────────────────────────────────────────────┘        │
+  └────────────────────────────────────────────────┘        │
         │ returns str                                       │
         ▼                                                   │
    Session: fit_card = "…"                                  │
         │                                                   │
         ▼                                                   ▼
-  ┌──────────────────────────────────────────────────────────┐
-  │  return session   →  caller checks session["error"]:        │
-  │    error is None  → success (selected_item/outfit/fit_card) │
-  │    error set      → early exit message shown to user        │
-  └──────────────────────────────────────────────────────────┘
+  ┌────────────────────────────────────────────────────────────┐
+  │  return session   →  caller checks session["error"]:       │
+  │    error is None  → success (selected_item/outfit/fit_card)│
+  │    error set      → early exit message shown to user       │
+  └────────────────────────────────────────────────────────────┘
 ```
 
 **How to read it:** the Planning Loop is the only component that calls tools; each tool reads its
